@@ -15,9 +15,9 @@
     <img src="/static/images/scraper/directory_login.png" alt="Logging in to the directory">
     <p>Then, perform a search (it doesn't matter what for).</p>
     <img src="/static/images/scraper/directory_search.png" alt="Searching in the directory">
-    <p>In the developer tools, select the query to the <code>api</code> endpoint. You'll notice the <code>Cookie</code> is too long to be displayed without elipses, so right click and copy it, then extract only the <code>_people_search_session</code> value. Make sure to remove the <code>_people_search_session=</code> label, and any cookies afterward, which would be separated by  a semicolon. (You can also copy the value under the "Cookies" tab of the developer tools.)</p>
-    <img src="/static/images/scraper/directory_pss.png" alt="Copying Yale Directory _people_search_session cookie">
-    <textarea name="people_search_session_cookie" cols=30 rows=8 placeholder="Directory people_search_session cookie"></textarea>
+    <p>In the developer tools, select the query to the <code>api</code> endpoint. You'll notice the <code>Cookie</code> is too long to be displayed without elipses, so right click and copy it, then paste below. (You can also copy the value under the "Cookies" tab of the developer tools.)</p>
+    <img src="/static/images/scraper/directory_cookie.png" alt="Copying Yale Directory cookie">
+    <textarea name="directory_cookie" cols=30 rows=8 placeholder="Directory cookie"></textarea>
     <p>Finally, grab the <code>X-CSRF-Token</code> header value.</p>
     <img src="/static/images/scraper/directory_csrf_token.png" alt="Copying Yale Directory X-CSRF-Token header">
     <textarea name="csrf_token" cols=30 rows=3 placeholder="Directory CSRF Token"></textarea>

@@ -23,12 +23,23 @@ function saveInputsToURL() {
 
 function loadInputsFromURL() {
     const params = new URLSearchParams(window.location.search);
-    console.log(inputs.length)
     for (let input of inputs) {
-        input.value = decodeURIComponent(params.get(input.name));
+        const param = params.get(input.name);
+        if(param) {
+            input.value = decodeURIComponent(params.get(input.name));
+        }
     }
-
 }
+
+function getCookieByName(name, cookie)
+{
+    const found = RegExp(name+"=[^;]+").exec(cookie);
+    if(!found) return null;
+    return found.toString().replace(/^[^=]+./, "");
+}
+
+const parsePeopleSearchSession =
+    (directoryCookie) => getCookieByName("_people_search_session", directoryCookie);
 
 document.oninput = function() {
     setSubmitEnabled();
@@ -46,6 +57,14 @@ submit.onclick = function() {
     for (let input of inputs) {
         payload[input.name] = input.value.trim();
     }
+
+    payload.people_search_session_cookie = parsePeopleSearchSession(payload.directory_cookie);
+    console.log(payload.people_search_session_cookie)
+    if(!payload.people_search_session_cookie) {
+        alert("Could not find People Search session cookie. Please check your directory cookie and try again.");
+        return;
+    }
+
     let caches = {};
     for (let cacheCheckbox of cacheCheckboxes) {
         caches[cacheCheckbox.name] = cacheCheckbox.checked;

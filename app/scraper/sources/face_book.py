@@ -7,6 +7,7 @@ import json
 import requests
 import os
 import re
+import traceback
 from cryptography.fernet import Fernet
 from celery.utils.log import get_task_logger
 
@@ -133,108 +134,114 @@ class FaceBook(Source):
         people = []
         emails = {}
         for container in containers:
-            person = {
-                'school': 'Yale College',
-                'school_code': 'YC',
-            }
-
-            person['last_name'], person['first_name'] = self.clean_name(container.find('h5', {'class': 'yalehead'}).text)
-            person['year'] = self.clean_year(container.find('div', {'class': 'student_year'}).text)
-            pronouns = container.find('div', {'class': 'student_info_pronoun'}).text
-
-            pronouns = pronouns.replace(')', '')
-            pronouns = pronouns.replace('(', '')
-
-            person['pronouns'] = pronouns if pronouns else None
-
-            info = container.find_all('div', {'class': 'student_info'})
-
-            person['college'] = info[0].text.replace(' College', '')
             try:
-                person['email'] = info[1].find('a').text
-            except AttributeError:
-                pass
-            trivia = info[1].find_all(text=True, recursive=False)
-            try:
-                room = trivia.pop(0) if self.RE_ROOM.match(trivia[0]) else None
-                if room:
-                    person['residence'] = room
-                    result = RE_ROOM.search(room)
-                    person['building_code'], person['entryway'], person['floor'], person['suite'], person['room'] = result.groups()
-                if self.RE_BIRTHDAY.match(trivia[-1]):
-                    birthday = trivia.pop()
-                    person['birthday'] = birthday
-                    birth_month, birth_day = birthday.split()
-                    person['birth_month'] = self.MONTH_ABBREVIATIONS.index(birth_month) + 1
-                    person['birth_day'] = int(birth_day)
-                person['major'] = trivia.pop() if trivia[-1] in MAJORS else None
-                if person['major'] and person['major'] in MAJOR_FULL_NAMES:
-                    person['major'] = MAJOR_FULL_NAMES[person['major']]
-                if person['major'] == 'Visiting International Program':
-                    person['visitor'] = True
-                    person['major'] = None
+                person = {
+                    'school': 'Yale College',
+                    'school_code': 'YC',
+                }
+
+                person['last_name'], person['first_name'] = self.clean_name(container.find('h5', {'class': 'yalehead'}).text)
+                person['year'] = self.clean_year(container.find('div', {'class': 'student_year'}).text)
+                pronouns = container.find('div', {'class': 'student_info_pronoun'}).text
+
+                pronouns = pronouns.replace(')', '')
+                pronouns = pronouns.replace('(', '')
+
+                person['pronouns'] = pronouns if pronouns else None
+
+                info = container.find_all('div', {'class': 'student_info'})
+
+                person['college'] = info[0].text.replace(' College', '')
+                try:
+                    person['email'] = info[1].find('a').text
+                except AttributeError:
+                    pass
+                trivia = info[1].find_all(text=True, recursive=False)
+                try:
+                    room = trivia.pop(0) if self.RE_ROOM.match(trivia[0]) else None
+                    if room:
+                        person['residence'] = room
+                        result = RE_ROOM.search(room)
+                        person['building_code'], person['entryway'], person['floor'], person['suite'], person['room'] = result.groups()
+                    if self.RE_BIRTHDAY.match(trivia[-1]):
+                        birthday = trivia.pop()
+                        person['birthday'] = birthday
+                        birth_month, birth_day = birthday.split()
+                        person['birth_month'] = self.MONTH_ABBREVIATIONS.index(birth_month) + 1
+                        person['birth_day'] = int(birth_day)
+                    person['major'] = trivia.pop() if trivia[-1] in MAJORS else None
+                    if person['major'] and person['major'] in MAJOR_FULL_NAMES:
+                        person['major'] = MAJOR_FULL_NAMES[person['major']]
+                    if person['major'] == 'Visiting International Program':
+                        person['visitor'] = True
+                        person['major'] = None
+                    else:
+                        person['visitor'] = False
+                except IndexError:
+                    pass
+
+                new_trivia = []
+                for r in range(len(trivia)):
+                    row = trivia[r].strip()
+                    if row.endswith(' /'):
+                        row = row.rstrip(' /')
+                        if self.RE_ACCESS_CODE.match(row):
+                            person['access_code'] = row
+                        if self.RE_PHONE.match(row):
+                            person['phone'] = self.clean_phone(row)
+                        if len(new_trivia) == 1 and not person.get('residence'):
+                            person['residence'] = new_trivia.pop(0)
+                    else:
+                        new_trivia.append(row)
+                trivia = new_trivia
+
+                # Handle first row of address being duplicated for residence
+                if len(trivia) >= 2 and trivia[0] == trivia[1] and not person.get('residence'):
+                    person['residence'] = trivia.pop(0)
+
+                person['address'] = '\n'.join(trivia)
+
+                person['leave'] = False
+
+                directory_entry = self.directory.get_directory_entry(person)
+                if directory_entry is not None:
+                    person = self.directory.merge_one(person, directory_entry)
                 else:
-                    person['visitor'] = False
-            except IndexError:
-                pass
+                    logger.info('Could not find directory entry.')
 
-            new_trivia = []
-            for r in range(len(trivia)):
-                row = trivia[r].strip()
-                if row.endswith(' /'):
-                    row = row.rstrip(' /')
-                    if self.RE_ACCESS_CODE.match(row):
-                        person['access_code'] = row
-                    if self.RE_PHONE.match(row):
-                        person['phone'] = self.clean_phone(row)
-                    if len(new_trivia) == 1 and not person.get('residence'):
-                        person['residence'] = new_trivia.pop(0)
-                else:
-                    new_trivia.append(row)
-            trivia = new_trivia
+                image_id = self.clean_image_id(container.find('img')['src'])
+                if image_id:
+                    image_filename = self.image_uploader.get_image_filename(image_id, person)
+                    if image_filename in self.image_uploader.files:
+                        person['image'] = self.image_uploader.get_file_url(image_filename)
+                    else:
+                        logger.info('Image has not been processed yet.')
+                        image_r = requests.get('https://students.yale.edu/facebook/Photo?id=' + str(image_id),
+                                            headers={'Cookie': self.cookie},
+                                            stream=True)
+                        image_r.raw.decode_content = True
+                        try:
+                            im = Image.open(image_r.raw)
 
-            # Handle first row of address being duplicated for residence
-            if len(trivia) >= 2 and trivia[0] == trivia[1] and not person.get('residence'):
-                person['residence'] = trivia.pop(0)
+                            # Paste mask over watermark
+                            im.paste(watermark_mask, (0, 0), watermark_mask)
 
-            person['address'] = '\n'.join(trivia)
+                            output = BytesIO()
+                            im.save(output, format='JPEG', mode='RGB')
 
-            person['leave'] = False
+                            person['image'] = self.image_uploader.upload_image(output, image_filename)
+                        except OSError:
+                            # "Cannot identify image" error
+                            logger.info('PIL could not identify image.')
 
-            directory_entry = self.directory.get_directory_entry(person)
-            if directory_entry is not None:
-                person = self.directory.merge_one(person, directory_entry)
-            else:
-                logger.info('Could not find directory entry.')
-
-            image_id = self.clean_image_id(container.find('img')['src'])
-            if image_id:
-                image_filename = self.image_uploader.get_image_filename(image_id, person)
-                if image_filename in self.image_uploader.files:
-                    person['image'] = self.image_uploader.get_file_url(image_filename)
-                else:
-                    logger.info('Image has not been processed yet.')
-                    image_r = requests.get('https://students.yale.edu/facebook/Photo?id=' + str(image_id),
-                                           headers={'Cookie': self.cookie},
-                                           stream=True)
-                    image_r.raw.decode_content = True
-                    try:
-                        im = Image.open(image_r.raw)
-
-                        # Paste mask over watermark
-                        im.paste(watermark_mask, (0, 0), watermark_mask)
-
-                        output = BytesIO()
-                        im.save(output, format='JPEG', mode='RGB')
-
-                        person['image'] = self.image_uploader.upload_image(output, image_filename)
-                    except OSError:
-                        # "Cannot identify image" error
-                        logger.info('PIL could not identify image.')
-
-            if person.get('email'):
-                emails[person['email']] = len(people)
-            people.append(person)
+                if person.get('email'):
+                    emails[person['email']] = len(people)
+                people.append(person)
+            except Exception as e:
+                logger.error('Error parsing person.')
+                logger.error(e)
+                logger.error(traceback.format_exc())
+                continue
 
         # Check leaves
         for backup in ('pre2020', 'fall2020', 'spring2020', 'fall2022'):
